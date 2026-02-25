@@ -33,6 +33,8 @@ locals {
 resource "aws_lambda_event_source_mapping" "event_source" {
   for_each = var.event_source_mappings
 
+  region = var.region
+
   batch_size                         = lookup(each.value, "batch_size", null)
   bisect_batch_on_function_error     = lookup(each.value, "bisect_batch_on_function_error", null)
   enabled                            = lookup(each.value, "enabled", null)
@@ -44,9 +46,11 @@ resource "aws_lambda_event_source_mapping" "event_source" {
   parallelization_factor             = lookup(each.value, "parallelization_factor", null)
   starting_position                  = lookup(each.value, "starting_position", length(regexall(".*:sqs:.*", lookup(each.value, "event_source_arn", null))) > 0 ? null : "TRIM_HORIZON")
   starting_position_timestamp        = lookup(each.value, "starting_position_timestamp", null)
+  function_response_types            = lookup(each.value, "function_response_types", null)
 
   dynamic "destination_config" {
     for_each = lookup(each.value, "destination_arn_on_failure", null) != null ? [true] : []
+
     content {
       on_failure {
         destination_arn = each.value["destination_arn_on_failure"]
@@ -55,12 +59,32 @@ resource "aws_lambda_event_source_mapping" "event_source" {
   }
 
   dynamic "filter_criteria" {
-    for_each = try(each.value["filter_criteria"], null) != null ? [true] : []
+    for_each = try(each.value.filter_criteria, null) != null ? [true] : []
 
     content {
-      filter {
-        pattern = try(each.value["filter_criteria"].pattern, null)
+      dynamic "filter" {
+        for_each = try(flatten([each.value.filter_criteria]), [])
+
+        content {
+          pattern = try(filter.value.pattern, null)
+        }
       }
+    }
+  }
+
+  dynamic "metrics_config" {
+    for_each = try([each.value.metrics_config], [])
+
+    content {
+      metrics = metrics_config.value.metrics
+    }
+  }
+
+  dynamic "scaling_config" {
+    for_each = try(each.value.scaling_config, null) != null ? [true] : []
+
+    content {
+      maximum_concurrency = try(each.value.scaling_config.maximum_concurrency, null)
     }
   }
 }
@@ -177,14 +201,10 @@ data "aws_iam_policy_document" "event_sources" {
   }
 }
 
-resource "aws_iam_policy" "event_sources" {
-  count  = length(var.event_source_mappings) > 0 ? 1 : 0
-  policy = data.aws_iam_policy_document.event_sources[count.index].json
-}
-
-resource "aws_iam_role_policy_attachment" "event_sources" {
+resource "aws_iam_role_policy" "event_sources" {
   count = length(var.event_source_mappings) > 0 ? 1 : 0
 
-  policy_arn = aws_iam_policy.event_sources[count.index].arn
-  role       = aws_iam_role.lambda.name
+  name   = "${var.function_name}-event-source-mapping"
+  policy = data.aws_iam_policy_document.event_sources[count.index].json
+  role   = aws_iam_role.lambda.id
 }

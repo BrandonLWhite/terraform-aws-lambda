@@ -1,10 +1,20 @@
-locals {
-  environment   = "production"
-  function_name = "example-with-container-images"
+module "fixtures" {
+  source = "../fixtures"
 }
 
+locals {
+  environment   = "production"
+  function_name = module.fixtures.output_function_name
+}
+
+#trivy:ignore:AVD-AWS-0031
 resource "aws_ecr_repository" "this" {
-  name = local.function_name
+  force_delete = true
+  name         = local.function_name
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
 }
 
 module "lambda" {
@@ -18,7 +28,9 @@ module "lambda" {
 }
 
 resource "null_resource" "initial_image" {
-  depends_on = [aws_ecr_repository.this]
+  provisioner "local-exec" {
+    command = "aws ecr get-login-password --region ${var.region} | docker login --username AWS --password-stdin ${aws_ecr_repository.this.repository_url}"
+  }
 
   provisioner "local-exec" {
     command     = "docker build --tag ${aws_ecr_repository.this.repository_url}:${local.environment} ."

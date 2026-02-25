@@ -31,6 +31,7 @@ variable "cloudwatch_lambda_insights_enabled" {
   type        = bool
 }
 
+# FIXME: this variable should be renamed in the next major release to reflect that it attaches CloudWatch Logs permissions
 variable "cloudwatch_logs_enabled" {
   description = "Enables your Lambda function to send logs to CloudWatch. The IAM role of this Lambda function will be enhanced with required permissions."
   type        = bool
@@ -43,10 +44,23 @@ variable "cloudwatch_logs_kms_key_id" {
   default     = null
 }
 
+
+variable "cloudwatch_logs_log_group_class" {
+  description = "Specifies the log class of the log group. Possible values are: `STANDARD`, `INFREQUENT_ACCESS`, or `DELIVERY`."
+  default     = null
+  type        = string
+}
+
 variable "cloudwatch_logs_retention_in_days" {
   description = "Specifies the number of days you want to retain log events in the specified log group. Possible values are: 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653, and 0. If you select 0, the events in the log group are always retained and never expire."
   default     = null
   type        = number
+}
+
+variable "cloudwatch_logs_skip_destroy" {
+  description = "Set to true if you do not wish the log group (and any logs it may contain) to be deleted at destroy time, and instead just remove the log group from the Terraform state."
+  type        = bool
+  default     = false
 }
 
 variable "cloudwatch_log_subscription_filters" {
@@ -55,9 +69,15 @@ variable "cloudwatch_log_subscription_filters" {
   type        = map(any)
 }
 
+variable "create_cloudwatch_log_group" {
+  description = "Create and manage the CloudWatch Log Group for the Lambda function. Set to `false` to reuse an existing log group."
+  default     = true
+  type        = bool
+}
+
 variable "description" {
   description = "Description of what your Lambda Function does."
-  default     = "Instruction set architecture for your Lambda function. Valid values are [\"x86_64\"] and [\"arm64\"]."
+  default     = ""
   type        = string
 }
 
@@ -67,6 +87,12 @@ variable "environment" {
   type = object({
     variables = map(string)
   })
+}
+
+variable "ephemeral_storage_size" {
+  description = "The size of your Lambda functions ephemeral storage (/tmp) represented in MB. Valid value between 512 MB to 10240 MB."
+  default     = 512
+  type        = number
 }
 
 variable "event_source_mappings" {
@@ -90,15 +116,21 @@ variable "filename" {
   type        = string
 }
 
+variable "handler" {
+  description = "The function entrypoint in your code."
+  default     = ""
+  type        = string
+}
+
 variable "ignore_external_function_updates" {
   description = "Ignore updates to your Lambda function executed externally to the Terraform lifecycle. Set this to `true` if you're using CodeDeploy, aws CLI or other external tools to update your Lambda function code."
   default     = false
   type        = bool
 }
 
-variable "handler" {
-  description = "The function entrypoint in your code."
-  default     = ""
+variable "iam_role_name" {
+  description = "Override the name of the IAM role for the function. Otherwise the default will be your function name with the region as a suffix."
+  default     = null
   type        = string
 }
 
@@ -138,6 +170,17 @@ variable "layers" {
   type        = list(string)
 }
 
+variable "logging_config" {
+  description = "Configuration block for advanced logging settings."
+  default     = null
+  type = object({
+    log_format            = string
+    application_log_level = optional(string, null)
+    log_group             = optional(string, null)
+    system_log_level      = optional(string, null)
+  })
+}
+
 variable "memory_size" {
   description = "Amount of memory in MB your Lambda Function can use at runtime."
   default     = 128
@@ -154,6 +197,24 @@ variable "publish" {
   description = "Whether to publish creation/change as new Lambda Function Version."
   default     = false
   type        = bool
+}
+
+variable "region" {
+  description = "Alternative region used in all region-aware resources. If not set, the provider's region will be used."
+  default     = null
+  type        = string
+}
+
+variable "replace_security_groups_on_destroy" {
+  default     = null
+  description = "(Optional) Whether to replace the security groups on the function's VPC configuration prior to destruction. Removing these security group associations prior to function destruction can speed up security group deletion times of AWS's internal cleanup operations. By default, the security groups will be replaced with the default security group in the function's configured VPC. Set the `replacement_security_group_ids` attribute to use a custom list of security groups for replacement."
+  type        = bool
+}
+
+variable "replacement_security_group_ids" {
+  description = "(Optional) List of security group IDs to assign to the function's VPC configuration prior to destruction. `replace_security_groups_on_destroy` must be set to `true` to use this attribute."
+  type        = list(string)
+  default     = null
 }
 
 variable "reserved_concurrent_executions" {
@@ -225,10 +286,17 @@ variable "tracing_config_mode" {
 }
 
 variable "vpc_config" {
-  description = "Provide this to allow your function to access your VPC (if both 'subnet_ids' and 'security_group_ids' are empty then vpc_config is considered to be empty or unset, see https://docs.aws.amazon.com/lambda/latest/dg/vpc.html for details)."
+  description = "Provide this to allow your function to access your VPC (if both `subnet_ids` and `security_group_ids` are empty then vpc_config is considered to be empty or unset, see https://docs.aws.amazon.com/lambda/latest/dg/vpc.html for details)."
   default     = null
   type = object({
-    security_group_ids = list(string)
-    subnet_ids         = list(string)
+    ipv6_allowed_for_dual_stack = optional(bool, false)
+    security_group_ids          = list(string)
+    subnet_ids                  = list(string)
   })
+}
+
+variable "snap_start" {
+  description = "Enable snap start settings for low-latency startups. This feature is currently only supported for `java11` and `java17` runtimes and `x86_64` architectures."
+  default     = false
+  type        = bool
 }

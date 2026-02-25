@@ -14,16 +14,17 @@ module "lambda" {
   filename         = module.source.output_path
   function_name    = "example-with-cloudwatch-events"
   handler          = "index.handler"
-  runtime          = "nodejs14.x"
+  runtime          = "nodejs22.x"
   source_code_hash = module.source.output_base64sha256
 
   cloudwatch_event_rules = {
     scheduled = {
       schedule_expression = "rate(1 minute)"
 
-      // optionally overwrite arguments like 'description'
+      // optionally overwrite arguments like 'description' or 'state'
       // from https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_event_rule
       description = "Triggered by CloudTrail"
+      state       = "DISABLED"
 
       // optionally overwrite `cloudwatch_event_target_arn` in case an alias should be used for the event rule
       cloudwatch_event_target_arn = aws_lambda_alias.example.arn

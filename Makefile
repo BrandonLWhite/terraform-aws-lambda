@@ -1,71 +1,39 @@
-VERSION := $(shell cat VERSION.txt)
-PREFIX?=$(shell pwd)
-EXAMPLES_DIR := examples
+DESCRIBE           := $(shell git fetch --all > /dev/null && git describe --match "v*" --always --tags)
+DESCRIBE_PARTS     := $(subst -, ,$(DESCRIBE))
+# 'v0.2.0'
+VERSION_TAG        := $(word 1,$(DESCRIBE_PARTS))
+# '0.2.0'
+VERSION            := $(subst v,,$(VERSION_TAG))
+# '0 2 0'
+VERSION_PARTS      := $(subst ., ,$(VERSION))
 
-## Tools
-BINDIR := $(PREFIX)/bin
-export GOBIN :=$(BINDIR)
-export PATH := $(GOBIN):$(PATH)
-SEMBUMP := $(BINDIR)/sembump
+MAJOR              := $(word 1,$(VERSION_PARTS))
+MINOR              := $(word 2,$(VERSION_PARTS))
+PATCH              := $(word 3,$(VERSION_PARTS))
 
-all: init fmt validate tflint tfsec
+ifeq ($(BUMP), major)
+NEXT_VERSION		:= $(shell echo $$(($(MAJOR)+1)).0.0)
+else ifeq ($(BUMP), minor)
+NEXT_VERSION		:= $(shell echo $(MAJOR).$$(($(MINOR)+1)).0)
+else
+NEXT_VERSION		:= $(shell echo $(MAJOR).$(MINOR).$$(($(PATCH)+1)))
+endif
+NEXT_TAG 			:= v$(NEXT_VERSION)
 
-.PHONY: init
-init: ## Initialize a Terraform working directory
+.PHONY: check
+check: ## Runs pre-commit hooks against all files
 	@echo "+ $@"
-	@terraform init
-
-.PHONY: fmt
-fmt: ## Rewrites Terraform files to canonical format
-	@echo "+ $@"
-	@terraform fmt -check=true -recursive
-
-.PHONY: validate
-validate: ## Validates the Terraform files
-	@echo "+ $@"
-	@AWS_REGION=eu-west-1 terraform validate
-
-.PHONY: tflint
-tflint: ## Runs tflint on all Terraform files
-	@echo "+ $@"
-	@tflint -f compact || exit 1
-
-.PHONY: tfsec
-tfsec: ## Runs tfsec on all Terraform files
-	@echo "+ $@"
-	@tfsec . --exclude-downloaded-modules --concise-output || exit 1
-
-.PHONY: test
-test: ## Runs all terratests
-	@echo "+ $@"
-	@cd test && go test -v -count=1 -timeout 30m
-
-.PHONY: documentation
-documentation: ## Generates README.md from static snippets and Terraform variables
-	@echo "+ $@"
-	terraform-docs markdown table . > docs/part2.md
-	cat docs/*.md > README.md
-	terraform-docs markdown table modules/deployment > docs/deployment/part2.md
-	cat docs/deployment/*.md > modules/deployment/README.md
-
-.PHONY: tag
-tag: ## Create a new git tag to prepare to build a release
-	@echo "+ $@"
-	git tag -a $(VERSION) -m "$(VERSION)"
-	@echo "Run git push origin $(VERSION) to push your new tag to GitHub and trigger a build."
-
-$(SEMBUMP):
-	GO111MODULE=off go get -u github.com/jessfraz/junk/sembump
+	@command -v pre-commit >/dev/null 2>&1 || { \
+		echo "pre-commit not installed. Install via 'pip install pre-commit' or 'brew install pre-commit'."; \
+		exit 1; \
+	}
+	@pre-commit run --all-files
 
 .PHONY: bump-version
-BUMP ?= patch
-bump-version: $(SEMBUMP) ## Bump the version in the version file. Set BUMP to [ patch | major | minor ].
-	@echo "+ $@"
-	$(eval NEW_VERSION = $(shell $(BINDIR)/sembump --kind $(BUMP) $(VERSION)))
-	@echo "Bumping VERSION.txt from $(VERSION) to $(NEW_VERSION)"
-	echo $(NEW_VERSION) > VERSION.txt
+bump-version: check-bump ## Bumps the version of this module. Set BUMP to [ major | minor | patch ].
+	@echo bumping version from $(VERSION_TAG) to $(NEXT_TAG)
 	@echo "Updating links in README.md"
-	sed -i '' s/$(subst v,,$(VERSION))/$(subst v,,$(NEW_VERSION))/g docs/part1.md
+	@sed -i '' s/$(subst v,,$(VERSION))/$(subst v,,$(NEXT_VERSION))/g README.md
 
 .PHONY: check-git-clean
 check-git-clean:
@@ -78,11 +46,46 @@ check-git-branch: check-git-clean
 	git fetch --all --tags --prune
 	git checkout main
 
-release: check-git-branch bump-version documentation ## Releases a new module version
+.PHONY: check-bump
+check-bump:
 	@echo "+ $@"
-	git add VERSION.txt README.md docs/part1.md
-	git commit -vsam "Bump version to $(NEW_VERSION)"
-	@echo "Run make tag to create and push the tag for new version $(NEW_VERSION)"
+	@if [ -z "$(BUMP)" ]; then \
+		echo "Error: BUMP variable must be specified for release."; \
+		echo "Usage: make release BUMP=major|minor|patch"; \
+		exit 1; \
+	fi
+	@if [ "$(BUMP)" != "major" ] && [ "$(BUMP)" != "minor" ] && [ "$(BUMP)" != "patch" ]; then \
+		echo "Error: BUMP must be one of: major, minor, patch"; \
+		echo "Usage: make release BUMP=major|minor|patch"; \
+		exit 1; \
+	fi
+
+release: check-git-branch bump-version ## Releases a new module version
+	@echo "+ $@"
+	git add README.md
+	git commit -vsam "Bump version to $(NEXT_TAG)"
+	git tag -a $(NEXT_TAG) -m "$(NEXT_TAG)"
+	git push origin $(NEXT_TAG)
+	git push
+	@if ! command -v gh >/dev/null 2>&1 ; then 											\
+		echo "gh CLI is not installed. Please create the release manually on GitHub." ; \
+		exit 0 ; 																		\
+	fi;
+	@if ! gh auth status >/dev/null 2>&1 ; then 											\
+		echo "gh CLI is not authenticated. Please run 'gh auth login' or create the release manually on GitHub." ; \
+		exit 0 ; 																		\
+	fi;
+	@gh release create $(NEXT_TAG) --generate-notes
+	@echo "GitHub release created successfully for tag $(NEXT_TAG) at: https://github.com/moritzzimmer/terraform-aws-lambda/releases/tag/$(NEXT_TAG)"
+
+.PHONY: update
+update: ## Upgrades Terraform core and providers constraints recursively using https://github.com/minamijoyo/tfupdate
+	@echo "+ $@"
+	@command -v tfupdate >/dev/null 2>&1 || { echo >&2 "Please install tfupdate: 'brew install minamijoyo/tfupdate/tfupdate'"; exit 1; }
+	@tfupdate terraform -v ">= 1.5.7" -r .
+	@tfupdate provider aws -v ">= 6.0" -r .
+	@tfupdate provider archive -v ">= 2.2" -r .
+	@tfupdate provider null -v ">= 3.2" -r .
 
 .PHONY: help
 help: ## Display this help screen
